@@ -91,13 +91,6 @@ When users interact with your bot, they will need to:
 2. Set up environment variables in Heroku dashboard
 3. Deploy using Heroku CLI or GitHub integration
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Credits
 
