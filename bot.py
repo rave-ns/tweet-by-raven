@@ -1,10 +1,15 @@
 from telebot import types, TeleBot
 from dotenv import load_dotenv
 from pymongo import MongoClient
+import json
 import os
+import urllib.error
+import urllib.request
 import tweepy
 
 load_dotenv()
+
+XQUIK_API_BASE_URL = os.getenv('XQUIK_API_BASE_URL', 'https://xquik.com/api/v1').rstrip('/')
 
 try:
     mongo = MongoClient(os.getenv('MONGO'))
@@ -31,10 +36,13 @@ def account_setting():
     api_secret = types.InlineKeyboardButton(text='API Secret', callback_data='api_secret')
     tw_token = types.InlineKeyboardButton(text='Access Token', callback_data='token')
     token_secret = types.InlineKeyboardButton(text='Token Secret', callback_data='token_secret')
+    xquik_api_key = types.InlineKeyboardButton(text='Xquik API Key', callback_data='xquik_api_key')
+    xquik_account = types.InlineKeyboardButton(text='Xquik Account', callback_data='xquik_account')
     test_connection = types.InlineKeyboardButton(text='🔄 Test Connection', callback_data='test_connection')
     back = types.InlineKeyboardButton(text='⬅️ Back', callback_data='main_menu')
 
     markup.add(api_key, api_secret, tw_token, token_secret)
+    markup.add(xquik_api_key, xquik_account)
     markup.add(test_connection)
     markup.add(back)
     return markup
@@ -92,6 +100,49 @@ def get_twitter_client(chat_id):
         return None
 
 
+def get_xquik_config(chat_id):
+    user_keys = keys.find_one({'_id': chat_id})
+    if not user_keys:
+        return None
+
+    api_key = user_keys.get('xquik_api_key')
+    account = user_keys.get('xquik_account')
+    if not api_key or not account:
+        return None
+
+    return {
+        'api_key': api_key,
+        'account': account,
+        'base_url': user_keys.get('xquik_api_base_url') or XQUIK_API_BASE_URL,
+    }
+
+
+def post_tweet_with_xquik(tweet_text, config):
+    payload = json.dumps({
+        'account': config['account'],
+        'text': tweet_text,
+    }).encode('utf-8')
+    request = urllib.request.Request(
+        f"{config['base_url']}/x/tweets",
+        data=payload,
+        headers={
+            'Content-Type': 'application/json',
+            'x-api-key': config['api_key'],
+        },
+        method='POST',
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read().decode('utf-8')
+            if response.status not in (200, 202):
+                raise RuntimeError(f"Xquik post failed with status {response.status}: {body[:300]}")
+            return json.loads(body)
+    except urllib.error.HTTPError as error:
+        body = error.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f"Xquik post failed with status {error.code}: {body[:300]}") from error
+
+
 @bot.message_handler(commands=['start'])
 def start(message):
     chat_id = message.chat.id
@@ -124,8 +175,8 @@ def call_handler(call):
     elif call.data == 'settings':
         bot.edit_message_text(
             text="⚙️ <b>Account Settings</b>\n\n"
-                 "To use this bot, you need to connect your Twitter account credentials.\n\n"
-                 "Click on each button to set up your Twitter API credentials:",
+                 "Set Twitter credentials for read/search features, or Xquik credentials for posting.\n\n"
+                 "Click each button to configure the account:",
             chat_id=chat_id,
             message_id=message_id,
             reply_markup=account_setting()
@@ -170,6 +221,26 @@ def call_handler(call):
             text="🔑 <b>Enter your Twitter Access Token Secret</b>\n\n"
                  "Please reply to this message with your Access Token Secret.\n\n"
                  "<i>You can find this in the Twitter Developer Portal under Keys and Tokens.</i>",
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=cancel_markup()
+        )
+
+    elif call.data == 'xquik_api_key':
+        user_state[chat_id] = 'awaiting_xquik_api_key'
+        bot.edit_message_text(
+            text="🔑 <b>Enter your Xquik API Key</b>\n\n"
+                 "This is used only for posting tweets through Xquik.",
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=cancel_markup()
+        )
+
+    elif call.data == 'xquik_account':
+        user_state[chat_id] = 'awaiting_xquik_account'
+        bot.edit_message_text(
+            text="👤 <b>Enter your Xquik Account</b>\n\n"
+                 "Use the connected X account handle, such as @your_handle.",
             chat_id=chat_id,
             message_id=message_id,
             reply_markup=cancel_markup()
@@ -306,10 +377,68 @@ def handle_messages(message):
             "✅ <b>Access Token Secret saved successfully!</b>\n\nAll credentials are now saved. Would you like to test your connection?",
             reply_markup=account_setting()
         )
+
+    elif current_state == 'awaiting_xquik_api_key':
+        xquik_api_key = message.text.strip()
+        keys.update_one({'_id': chat_id}, {'$set': {'xquik_api_key': xquik_api_key}}, upsert=True)
+        del user_state[chat_id]
+        bot.send_message(
+            chat_id,
+            "✅ <b>Xquik API Key saved successfully!</b>\n\nAdd the Xquik account handle next.",
+            reply_markup=account_setting()
+        )
+
+    elif current_state == 'awaiting_xquik_account':
+        xquik_account = message.text.strip()
+        keys.update_one({'_id': chat_id}, {'$set': {'xquik_account': xquik_account}}, upsert=True)
+        del user_state[chat_id]
+        bot.send_message(
+            chat_id,
+            "✅ <b>Xquik Account saved successfully!</b>\n\nPosting will use Xquik when both Xquik fields are set.",
+            reply_markup=account_setting()
+        )
         
     elif current_state == 'awaiting_tweet':
         tweet_text = message.text.strip()
         del user_state[chat_id]
+
+        if len(tweet_text) > 280:
+            bot.send_message(
+                chat_id,
+                f"❌ Your tweet is {len(tweet_text)} characters long. Twitter has a limit of 280 characters.",
+                reply_markup=main_menu()
+            )
+            return
+
+        xquik_config = get_xquik_config(chat_id)
+        if xquik_config:
+            try:
+                result = post_tweet_with_xquik(tweet_text, xquik_config)
+                tweet_id = result.get('tweetId')
+                if tweet_id:
+                    bot.send_message(
+                        chat_id,
+                        f"✅ <b>Tweet posted successfully with Xquik!</b>\n\n"
+                        f"🔗 <a href='https://x.com/i/status/{tweet_id}'>View your tweet</a>",
+                        reply_markup=main_menu()
+                    )
+                    return
+
+                write_action_id = result.get('writeActionId', 'pending')
+                bot.send_message(
+                    chat_id,
+                    f"✅ <b>Tweet accepted by Xquik.</b>\n\n"
+                    f"Confirmation is pending. Write action: <code>{write_action_id}</code>",
+                    reply_markup=main_menu()
+                )
+                return
+            except Exception as e:
+                bot.send_message(
+                    chat_id,
+                    f"❌ Error posting tweet with Xquik: {str(e)}",
+                    reply_markup=main_menu()
+                )
+                return
         
         client = get_twitter_client(chat_id)
         if not client:
@@ -321,14 +450,6 @@ def handle_messages(message):
             return
             
         try:
-            if len(tweet_text) > 280:
-                bot.send_message(
-                    chat_id,
-                    f"❌ Your tweet is {len(tweet_text)} characters long. Twitter has a limit of 280 characters.",
-                    reply_markup=main_menu()
-                )
-                return
-                
             tweet = client.update_status(tweet_text)
             username = tweet.user.screen_name
             tweet_id = tweet.id
