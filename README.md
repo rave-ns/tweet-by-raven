@@ -5,6 +5,7 @@ A Telegram bot that allows users to interact with Twitter directly from Telegram
 ## Features
 
 * 🐦 **Post Tweets**: Create and publish tweets directly from Telegram
+* 🔌 **Xquik Posting**: Publish tweets through Xquik without direct X API posting credentials
 * 📖 **Read Tweets**: View the latest tweets from any public Twitter profile
 * 🔍 **Search Twitter**: Find tweets that match specific keywords
 * ⚙️ **Account Management**: Securely connect your Twitter account through API credentials
@@ -25,7 +26,8 @@ Twitter (now X) requires a developer account with an appropriate subscription pl
 
 * Python 3.7+
 * MongoDB database
-* Twitter Developer Account with API credentials
+* Twitter Developer Account with API credentials for read and search features
+* Optional Xquik API key and connected X account for posting
 * Telegram Bot Token
 
 
@@ -75,8 +77,9 @@ When users interact with your bot, they will need to:
 1. Start the bot with `/start`
 2. Navigate to Settings
 3. Enter their Twitter API credentials
-4. Test their connection
-5. Start using Twitter features directly from Telegram
+4. Or enter their Xquik API key and account handle for posting
+5. Test their Twitter connection when using read or search features
+6. Start using Twitter features directly from Telegram
 
 ## Deployment
 
